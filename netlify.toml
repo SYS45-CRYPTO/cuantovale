@@ -16,7 +16,21 @@
   force = true
   headers = { X-From = "Netlify-Proxy" }
 
-# 2. Admin Console Proxy Rewrite
+# 2. Sitemap XML Proxy
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/sitemap.xml"
+  status = 200
+  force = true
+
+# 3. Robots TXT Proxy
+[[redirects]]
+  from = "/robots.txt"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/robots.txt"
+  status = 200
+  force = true
+
+# 4. Admin Console Proxy Rewrite
 [[redirects]]
   from = "/admin"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin"
@@ -29,8 +43,7 @@
   status = 200
   force = true
 
-# 3. Catch-all SSR proxy rewrite to Cloud Run Express backend (placed LAST)
-# Static files in dist/ (like sitemap.xml, robots.txt, assets/*) are automatically served first by Netlify CDN
+# 5. Catch-all SSR proxy rewrite to Cloud Run Express backend (placed LAST)
 [[redirects]]
   from = "/*"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/:splat"
@@ -45,12 +58,11 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
 
-# Explicit Content-Type Headers for Static SEO Files
+# Explicit Content-Type Headers
 [[headers]]
   for = "/sitemap.xml"
   [headers.values]
     Content-Type = "application/xml; charset=utf-8"
-    X-Robots-Tag = "noindex, follow"
 
 [[headers]]
   for = "/robots.txt"
