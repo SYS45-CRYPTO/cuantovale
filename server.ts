@@ -87,10 +87,11 @@ bootstrapDatabase().catch(err => {
 function isStagingHostname(req: Request): boolean {
   const host = (req.headers['host'] || '').toLowerCase();
   const forwardedHost = (req.headers['x-forwarded-host'] || '').toString().toLowerCase();
+  const xFrom = (req.headers['x-from'] || '').toString();
 
-  // Explicit production domain headers take precedence
-  const isCustomDomain = host.includes('cuantovale.es') || forwardedHost.includes('cuantovale.es');
-  if (isCustomDomain) {
+  // Explicit production domain or Netlify Proxy headers take precedence
+  const isProductionTraffic = xFrom === 'Netlify-Proxy' || host.includes('cuantovale.es') || forwardedHost.includes('cuantovale.es');
+  if (isProductionTraffic) {
     return false;
   }
 
