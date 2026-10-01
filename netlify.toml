@@ -5,6 +5,10 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES = "AIzaSyD6-GdZ9lo-6VWlHfMMHzL8OIgOdd6nPkI"
+  SECRETS_SCAN_OMIT_KEYS = "apiKey,VITE_FIREBASE_API_KEY"
+
 # API Proxy Rewrite (Status 200 same-origin proxy to Cloud Run backend)
 [[redirects]]
   from = "/api/*"
@@ -13,21 +17,36 @@
   force = true
   headers = { X-From = "Netlify-Proxy" }
 
+# Admin Console Proxy Rewrite
+[[redirects]]
+  from = "/admin"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/admin/*"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin/:splat"
+  status = 200
+  force = true
+
 # Public Sitemap and Robots pass-through
 [[redirects]]
   from = "/sitemap.xml"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/sitemap.xml"
   status = 200
+  force = true
 
 [[redirects]]
   from = "/robots.txt"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/robots.txt"
   status = 200
+  force = true
 
-# SPA Fallback for client-side routing
+# Catch-all SSR proxy rewrite to Cloud Run Express backend (Static assets in dist/assets served directly by Netlify CDN)
 [[redirects]]
   from = "/*"
-  to = "/index.html"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/:splat"
   status = 200
 
 # Global Security & Pre-Launch Indexation Lock Headers

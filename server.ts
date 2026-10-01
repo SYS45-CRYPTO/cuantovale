@@ -34,6 +34,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', true); // Trust reverse proxy headers (Netlify / Cloud Run)
+
 const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET_KEY = (process.env.ADMIN_SECRET_KEY || 'cv-admin-2026-pci').trim();
 
@@ -66,8 +68,8 @@ function revokeServerAdminSession(sessionId: string): void {
     activeAdminSessions.delete(sessionId);
   }
 }
-// GO LIVE SEO: Enable public indexing for production domain https://cuantovale.es
-const PUBLIC_INDEXING_ENABLED = true;
+// Pre-launch Indexation Lock (Requirement 14: Keep PUBLIC_INDEXING_ENABLED=false until final production verification)
+const PUBLIC_INDEXING_ENABLED = false;
 
 // ----------------------------------------------------
 // BODY PARSER, COOKIE PARSER & MIDDLEWARE
