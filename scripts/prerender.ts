@@ -255,6 +255,23 @@ function runPrerender() {
     generatedCount++;
   }
 
+  // Generate /admin/index.html with strict noindex, nofollow for Admin Console
+  const adminDir = path.resolve(distDir, 'admin');
+  fs.mkdirSync(adminDir, { recursive: true });
+  let adminHtml = baseTemplate
+    .replace(/<title>.*?<\/title>/, '<title>Consola Operativa | CuántoVale</title>')
+    .replace(/<meta\s+name="description"\s+content=".*?"\s*\/?>/, '<meta name="description" content="Consola de administración y operaciones de CuántoVale.es" />');
+
+  const adminRobotsMeta = '<meta name="robots" content="noindex, nofollow" />';
+  if (adminHtml.includes('<meta name="robots"')) {
+    adminHtml = adminHtml.replace(/<meta\s+name="robots"\s+content=".*?"\s*\/?>/, adminRobotsMeta);
+  } else {
+    adminHtml = adminHtml.replace('</head>', `  ${adminRobotsMeta}\n  </head>`);
+  }
+
+  fs.writeFileSync(path.resolve(adminDir, 'index.html'), adminHtml, 'utf-8');
+  console.log('[Prerender] Successfully generated dist/admin/index.html with noindex, nofollow!');
+
   console.log(`[Prerender] Successfully generated ${generatedCount} static SSG HTML files in dist/!`);
 }
 

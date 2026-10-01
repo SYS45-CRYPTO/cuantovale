@@ -14,8 +14,8 @@ interface SEOMetaHeadProps {
   schemaData?: object;
 }
 
-// Pre-launch Indexation Lock (Requirement: PUBLIC_INDEXING_ENABLED, default false)
-const PUBLIC_INDEXING_ENABLED = import.meta.env.VITE_PUBLIC_INDEXING_ENABLED === 'true';
+// Public Indexing Enabled
+const PUBLIC_INDEXING_ENABLED = true;
 
 export const SEOMetaHead: React.FC<SEOMetaHeadProps> = ({
   title,
@@ -38,7 +38,7 @@ export const SEOMetaHead: React.FC<SEOMetaHeadProps> = ({
     }
     metaDesc.setAttribute('content', description);
 
-    // 3. Robots (Pre-launch Lock: noindex when PUBLIC_INDEXING_ENABLED is false or on staging)
+    // 3. Robots (Public indexing enabled on production custom domain cuantovale.es, noindex on admin/staging)
     let metaRobots = document.querySelector('meta[name="robots"]');
     if (!metaRobots) {
       metaRobots = document.createElement('meta');
@@ -46,7 +46,7 @@ export const SEOMetaHead: React.FC<SEOMetaHeadProps> = ({
       document.head.appendChild(metaRobots);
     }
     const isStaging = typeof window !== 'undefined' && window.location.hostname.includes('run.app');
-    const shouldNoIndex = noindex || !PUBLIC_INDEXING_ENABLED || isStaging;
+    const shouldNoIndex = noindex || isStaging;
 
     metaRobots.setAttribute(
       'content',

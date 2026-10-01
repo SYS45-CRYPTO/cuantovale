@@ -7,6 +7,7 @@ import {
 } from '../types';
 import { SPANISH_PROVINCES_ALPHABETICAL, getProvinceFromPostcode } from '../data/provinces';
 import { trackEvent } from '../utils/analytics';
+import { submitLeadDirectly } from '../firebaseClient';
 import { X, CheckCircle2, AlertCircle, ArrowRight, ArrowLeft, ShieldCheck, Check, Building2, Calculator } from 'lucide-react';
 
 interface LeadModalOrFormProps {
@@ -182,23 +183,37 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
     };
 
     try {
-      const response = await fetch('/api/leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(leadPayload)
-      });
+      let createdLead: Lead | null = null;
 
-      if (!response.ok) {
-        throw new Error('Error al enviar la solicitud');
+      try {
+        const response = await fetch('/api/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(leadPayload)
+        });
+
+        if (response.ok) {
+          const resData = await response.json();
+          createdLead = resData.lead;
+        }
+      } catch (networkErr) {
+        console.warn('Network request failed, falling back to direct Firestore:', networkErr);
       }
 
-      const resData = await response.json();
-      setSubmittedLead(resData.lead);
-      if (onSuccess && resData.lead) {
-        onSuccess(resData.lead);
+      // If backend proxy failed (e.g. Netlify external proxy 404), save directly to Firestore
+      if (!createdLead) {
+        createdLead = await submitLeadDirectly(leadPayload);
       }
 
-      trackEvent('lead_submit', { service: formData.service, province: formData.province });
+      if (createdLead) {
+        setSubmittedLead(createdLead);
+        if (onSuccess) {
+          onSuccess(createdLead);
+        }
+        trackEvent('lead_submit', { service: formData.service, province: formData.province });
+      } else {
+        throw new Error('Error al registrar la solicitud');
+      }
     } catch (err: any) {
       setErrorMsg('No se pudo enviar la solicitud. Por favor inténtalo de nuevo.');
     } finally {

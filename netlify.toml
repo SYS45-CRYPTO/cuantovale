@@ -30,18 +30,16 @@
   status = 200
   force = true
 
-# 4. Admin Console Proxy Rewrite
+# 4. Admin Console Routing (Served directly from dist/admin/index.html on Netlify)
 [[redirects]]
   from = "/admin"
-  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin"
+  to = "/admin/index.html"
   status = 200
-  force = true
 
 [[redirects]]
   from = "/admin/*"
-  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin/:splat"
+  to = "/admin/index.html"
   status = 200
-  force = true
 
 # 5. Catch-all SSR proxy rewrite to Cloud Run Express backend (placed LAST)
 [[redirects]]

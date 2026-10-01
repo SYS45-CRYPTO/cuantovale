@@ -51,6 +51,26 @@ try {
   console.error('[CuántoVale Firestore] Failed to initialize Firestore SDK:', err);
 }
 
+// Helper to remove any undefined properties recursively before sending to Firestore
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForFirestore(item)) as any;
+  }
+  if (typeof data === 'object') {
+    const cleanObj: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleanObj[key] = sanitizeForFirestore(value);
+      }
+    }
+    return cleanObj as any;
+  }
+  return data;
+}
+
 // Memory fallback cache for local dev resilience
 let memoryLeads: Map<string, Lead> = new Map();
 let memoryProviders: Map<string, Provider> = new Map();
@@ -181,7 +201,8 @@ export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>)
 
   if (isFirestoreReady && db) {
     try {
-      await setDoc(doc(db, 'leads', leadId), newLead);
+      const sanitizedLead = sanitizeForFirestore(newLead);
+      await setDoc(doc(db, 'leads', leadId), sanitizedLead);
       
       // Record initial history
       const historyEntry: LeadStatusHistory = {
@@ -193,7 +214,7 @@ export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>)
         notes: `Solicitud registrada desde ${leadData.source_page || '/'}`,
         timestamp: new Date().toISOString()
       };
-      await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), historyEntry);
+      await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), sanitizeForFirestore(historyEntry));
     } catch (err) {
       console.error('[CuántoVale DB] Error inserting lead into Firestore:', err);
     }
@@ -288,7 +309,7 @@ export async function updateLead(
   if (isFirestoreReady && db) {
     try {
       const docRef = doc(db, 'leads', leadId);
-      await updateDoc(docRef, updates as any);
+      await updateDoc(docRef, sanitizeForFirestore(updates) as any);
 
       // Status history entry if status changed
       if (updates.status && updates.status !== previousStatus) {
@@ -301,7 +322,7 @@ export async function updateLead(
           notes: updates.invalid_reason ? `Motivo: ${updates.invalid_reason}` : undefined,
           timestamp: new Date().toISOString()
         };
-        await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), historyEntry);
+        await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), sanitizeForFirestore(historyEntry));
       }
     } catch (err) {
       console.error('[CuántoVale DB] Error updating lead in Firestore:', err);
@@ -426,7 +447,7 @@ export async function createProvider(providerData: Omit<Provider, 'provider_id' 
 
   if (isFirestoreReady && db) {
     try {
-      await setDoc(doc(db, 'providers', providerId), newProvider);
+      await setDoc(doc(db, 'providers', providerId), sanitizeForFirestore(newProvider));
     } catch (err) {
       console.error('[CuántoVale DB] Error creating provider in Firestore:', err);
     }
@@ -467,7 +488,7 @@ export async function updateProvider(providerId: string, updates: Partial<Provid
   if (isFirestoreReady && db) {
     try {
       const docRef = doc(db, 'providers', providerId);
-      await updateDoc(docRef, updates as any);
+      await updateDoc(docRef, sanitizeForFirestore(updates) as any);
     } catch (err) {
       console.error('[CuántoVale DB] Error updating provider in Firestore:', err);
     }
@@ -515,10 +536,10 @@ export async function recordAnalyticsEvent(event: AnalyticsEvent): Promise<void>
   if (isFirestoreReady && db) {
     try {
       const eventId = `evt-${crypto.randomUUID()}`;
-      await setDoc(doc(db, 'analytics_events', eventId), {
+      await setDoc(doc(db, 'analytics_events', eventId), sanitizeForFirestore({
         ...event,
         recorded_at: new Date().toISOString()
-      });
+      }));
     } catch (err) {
       // Non-blocking
     }
