@@ -1,0 +1,47 @@
+# CuántoVale.es - Netlify Deployment & Proxy Configuration
+# Architecture Option B: Static Frontend / Prerender on Netlify + API Proxy to Cloud Run Backend
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# API Proxy Rewrite (Status 200 same-origin proxy to Cloud Run backend)
+[[redirects]]
+  from = "/api/*"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/api/:splat"
+  status = 200
+  force = true
+  headers = { X-From = "Netlify-Proxy" }
+
+# Public Sitemap and Robots pass-through
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/sitemap.xml"
+  status = 200
+
+[[redirects]]
+  from = "/robots.txt"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/robots.txt"
+  status = 200
+
+# SPA Fallback for client-side routing
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Global Security & Pre-Launch Indexation Lock Headers
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Strict Disallow on Admin & API Routes
+[[headers]]
+  for = "/admin*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+    Cache-Control = "no-store, no-cache, must-revalidate"

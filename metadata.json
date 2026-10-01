@@ -1,0 +1,6 @@
+{
+  "name": "CuántoVale – Inteligencia de Precios y Calculadoras",
+  "description": "Plataforma de price intelligence y calculadoras profesionales para estimar costes reales antes de contratar en España. Beachhead: Protección contra incendios e ignifugación.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

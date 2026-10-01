@@ -1,0 +1,181 @@
+import { Lead } from '../types';
+
+export const INITIAL_LEADS: Lead[] = [
+  {
+    lead_id: 'lead-2026-081',
+    created_at: '2026-03-28T09:15:00Z',
+    service: 'ignifugacion',
+    province: 'Madrid',
+    postcode: '28850',
+    property_type: 'Nave logística / almacenamiento',
+    approx_square_meters: 1200,
+    need_status: 'adecuacion',
+    timeframe: 'menos_1_mes',
+    name: 'Carlos Mendoza',
+    company: 'Logística Corredor Henares S.A.',
+    phone: '+34 612 884 120',
+    email: 'carlos.mendoza@logisticah.es',
+    comments: 'Inspección de bomberos requiere certificar R60 en vigas y pilares antes de la entrega de llaves.',
+    dynamic_fields: {
+      structure_type: 'acero',
+      required_fire_resistance: 'R60',
+      system_preference: 'mortero',
+      structural_surface: 580,
+      height_access: 'altura_importante'
+    },
+    source_page: '/proteccion-incendios/ignifugar-nave-industrial-precio/',
+    source_channel: 'organic_search',
+    calculator_used: true,
+    calculator_result_min: 13500,
+    calculator_result_max: 18500,
+    calculator_confidence: 'ALTO',
+    consent_accepted: true,
+    consent_timestamp: '2026-03-28T09:15:00Z',
+    consent_version: '2026-v1',
+    status: 'WON',
+    assigned_provider_ids: ['prov-mad-01', 'prov-mad-02'],
+    provider_responses: [
+      {
+        provider_id: 'prov-mad-01',
+        assigned_at: '2026-03-28T10:00:00Z',
+        status: 'ACCEPTED',
+        contacted_at: '2026-03-28T11:30:00Z',
+        quoted_amount: 14800,
+        notes: 'Visita técnica realizada en Torrejón. Adjudicado.'
+      },
+      {
+        provider_id: 'prov-mad-02',
+        assigned_at: '2026-03-28T10:00:00Z',
+        status: 'ACCEPTED',
+        contacted_at: '2026-03-28T14:15:00Z',
+        quoted_amount: 16200,
+        notes: 'Presupuesto emitido.'
+      }
+    ],
+    lead_price: 120,
+    lead_model: 'SHARED',
+    quoted_value: 14800,
+    final_value: 14800
+  },
+  {
+    lead_id: 'lead-2026-082',
+    created_at: '2026-03-29T11:42:00Z',
+    service: 'ignifugacion',
+    province: 'Barcelona',
+    postcode: '08120',
+    property_type: 'Nave de fabricación metalmecánica',
+    approx_square_meters: 850,
+    need_status: 'nueva_instalacion',
+    timeframe: '1_3_meses',
+    name: 'Mireia Valls',
+    company: 'Mecanizados del Vallès S.L.',
+    phone: '+34 633 901 445',
+    email: 'mvalls@vallesmecanica.cat',
+    comments: 'Estructura metálica vista en taller principal. Interesa pintura intumescente blanca.',
+    dynamic_fields: {
+      structure_type: 'acero',
+      required_fire_resistance: 'R30',
+      system_preference: 'pintura_intumescente',
+      height_access: 'normal'
+    },
+    source_page: '/proteccion-incendios/pintura-intumescente-precio-m2/',
+    source_channel: 'organic_search',
+    calculator_used: true,
+    calculator_result_min: 11000,
+    calculator_result_max: 16500,
+    calculator_confidence: 'MEDIO',
+    consent_accepted: true,
+    consent_timestamp: '2026-03-29T11:42:00Z',
+    consent_version: '2026-v1',
+    status: 'QUOTE_ISSUED',
+    assigned_provider_ids: ['prov-bcn-01'],
+    provider_responses: [
+      {
+        provider_id: 'prov-bcn-01',
+        assigned_at: '2026-03-29T12:30:00Z',
+        status: 'ACCEPTED',
+        contacted_at: '2026-03-29T16:00:00Z',
+        quoted_amount: 13200,
+        notes: 'Presupuesto formal enviado con imprimación epoxi + intumescente base agua.'
+      }
+    ],
+    lead_price: 90,
+    lead_model: 'SHARED',
+    quoted_value: 13200
+  },
+  {
+    lead_id: 'lead-2026-083',
+    created_at: '2026-03-30T08:20:00Z',
+    service: 'ignifugacion',
+    province: 'Valencia',
+    postcode: '46190',
+    property_type: 'Nave industrial en polígono',
+    approx_square_meters: 600,
+    need_status: 'requerimiento_inspeccion',
+    timeframe: 'cuanto_antes',
+    name: 'Javier Navarro',
+    company: 'Distribuciones Ribarroja',
+    phone: '+34 655 412 899',
+    email: 'jnavarro@distribucionesrib.com',
+    comments: 'Requerimiento municipal por cambio de titularidad.',
+    dynamic_fields: {
+      structure_type: 'acero',
+      required_fire_resistance: 'R60',
+      system_preference: 'mortero',
+      height_access: 'altura_importante'
+    },
+    source_page: '/proteccion-incendios/ignifugar-nave-industrial-precio/',
+    source_channel: 'direct',
+    calculator_used: true,
+    calculator_result_min: 8000,
+    calculator_result_max: 11500,
+    calculator_confidence: 'MEDIO',
+    consent_accepted: true,
+    consent_timestamp: '2026-03-30T08:20:00Z',
+    consent_version: '2026-v1',
+    status: 'ROUTED',
+    assigned_provider_ids: ['prov-val-01'],
+    provider_responses: [
+      {
+        provider_id: 'prov-val-01',
+        assigned_at: '2026-03-30T08:45:00Z',
+        status: 'ACCEPTED',
+        contacted_at: '2026-03-30T09:30:00Z',
+        notes: 'En contacto telefónico. Pendiente de visita.'
+      }
+    ],
+    lead_price: 90,
+    lead_model: 'SHARED'
+  },
+  {
+    lead_id: 'lead-2026-084',
+    created_at: '2026-03-30T10:05:00Z',
+    service: 'mantenimiento',
+    province: 'Madrid',
+    postcode: '28022',
+    property_type: 'Nave comercial',
+    approx_square_meters: 450,
+    need_status: 'mantenimiento',
+    timeframe: 'menos_1_mes',
+    name: 'Ana Beltrán',
+    company: 'Beltrán Suministros',
+    phone: '+34 670 123 908',
+    email: 'ana@beltransuministros.es',
+    comments: 'Contrato de mantenimiento caducado. Necesitamos revisión de 8 extintores y 2 BIEs.',
+    dynamic_fields: {
+      extinguishers: 8,
+      bie_count: 2,
+      detection_installed: true
+    },
+    source_page: '/proteccion-incendios/mantenimiento-pci-precio/',
+    source_channel: 'organic_search',
+    calculator_used: false,
+    consent_accepted: true,
+    consent_timestamp: '2026-03-30T10:05:00Z',
+    consent_version: '2026-v1',
+    status: 'VERIFIED',
+    assigned_provider_ids: [],
+    lead_price: 60,
+    lead_model: 'SHARED'
+  }
+];

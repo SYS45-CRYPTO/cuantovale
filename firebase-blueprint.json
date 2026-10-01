@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "AdminSession": {
+      "title": "AdminSession",
+      "description": "Server-side persistent session record for authenticated operator access",
+      "type": "object",
+      "properties": {
+        "session_id_hash": { "type": "string", "description": "SHA-256 hash of random session UUID" },
+        "created_at": { "type": "string", "description": "ISO timestamp of session creation" },
+        "expires_at": { "type": "string", "description": "ISO timestamp of session expiration (12h)" },
+        "expires_at_ms": { "type": "number", "description": "Expiration epoch timestamp in milliseconds" },
+        "last_seen_at": { "type": "string", "description": "ISO timestamp of last request using this session" },
+        "revoked": { "type": "boolean", "description": "Indicates if session was manually logged out or invalidated" },
+        "revoked_at": { "type": "string", "description": "ISO timestamp when revoked" },
+        "admin_id": { "type": "string", "description": "Identifier of the operator" }
+      },
+      "required": ["session_id_hash", "created_at", "expires_at", "expires_at_ms", "revoked"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Quotation request for industrial fireproofing or PCI service",
+      "type": "object",
+      "properties": {
+        "lead_id": { "type": "string" },
+        "created_at": { "type": "string" },
+        "service": { "type": "string" },
+        "province": { "type": "string" },
+        "postcode": { "type": "string" },
+        "property_type": { "type": "string" },
+        "approx_square_meters": { "type": "number" },
+        "need_status": { "type": "string" },
+        "timeframe": { "type": "string" },
+        "name": { "type": "string" },
+        "company": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "comments": { "type": "string" },
+        "status": { "type": "string" },
+        "lead_model": { "type": "string" }
+      },
+      "required": ["lead_id", "service", "province", "name", "phone", "email"]
+    },
+    "Provider": {
+      "title": "Provider",
+      "description": "Authorized PCI installation company profile",
+      "type": "object",
+      "properties": {
+        "provider_id": { "type": "string" },
+        "company_name": { "type": "string" },
+        "cif": { "type": "string" },
+        "status": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["provider_id", "company_name"]
+    }
+  },
+  "firestore": {
+    "/admin_sessions/{sessionIdHash}": {
+      "schema": "#/entities/AdminSession",
+      "description": "Stores server-managed admin session documents"
+    },
+    "/leads/{leadId}": {
+      "schema": "#/entities/Lead",
+      "description": "Stores incoming quote request leads"
+    },
+    "/providers/{providerId}": {
+      "schema": "#/entities/Provider",
+      "description": "Stores verified provider companies"
+    }
+  }
+}
