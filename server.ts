@@ -68,8 +68,8 @@ function revokeServerAdminSession(sessionId: string): void {
     activeAdminSessions.delete(sessionId);
   }
 }
-// Pre-launch Indexation Lock (Requirement 14: Keep PUBLIC_INDEXING_ENABLED=false until final production verification)
-const PUBLIC_INDEXING_ENABLED = false;
+// Production Go-Live Indexation Switch
+const PUBLIC_INDEXING_ENABLED = true;
 
 // ----------------------------------------------------
 // BODY PARSER, COOKIE PARSER & MIDDLEWARE
@@ -89,30 +89,27 @@ function isStagingHostname(req: Request): boolean {
   const forwardedHost = (req.headers['x-forwarded-host'] || '').toString().toLowerCase();
 
   // Explicit production domain headers take precedence
-  if (host.includes('cuantovale.es') || forwardedHost.includes('cuantovale.es')) {
+  const isCustomDomain = host.includes('cuantovale.es') || forwardedHost.includes('cuantovale.es');
+  if (isCustomDomain) {
     return false;
   }
 
-  // Technical Cloud Run / preview staging hostnames
-  if (host.includes('.run.app') || forwardedHost.includes('.run.app')) {
-    return true;
-  }
-
-  return false;
+  // Technical Cloud Run / preview staging hostnames get noindex
+  return true;
 }
 
 // Canonical Domain & HTTPS Redirect Middleware (Requirement 7 & 8)
 app.use((req: Request, res: Response, next: NextFunction) => {
-  const host = (req.headers['host'] || '').toLowerCase();
+  const host = (req.headers['x-forwarded-host'] || req.headers['host'] || '').toString().toLowerCase();
   const proto = (req.headers['x-forwarded-proto'] || req.protocol).toString();
+
+  // Redirect www.cuantovale.es -> cuantovale.es
+  if (host.includes('www.cuantovale.es') || host.startsWith('www.')) {
+    return res.redirect(301, `https://cuantovale.es${req.originalUrl}`);
+  }
 
   // Redirect http -> https in production
   if (process.env.NODE_ENV === 'production' && proto === 'http') {
-    return res.redirect(301, `https://${host}${req.originalUrl}`);
-  }
-
-  // Redirect www.cuantovale.es -> cuantovale.es
-  if (host.startsWith('www.cuantovale.es')) {
     return res.redirect(301, `https://cuantovale.es${req.originalUrl}`);
   }
 
@@ -200,6 +197,32 @@ const requireAdminAuth = async (req: Request, res: Response, next: NextFunction)
   next();
 };
 
+// Strict Production Origin Allowlist Middleware (Requirement 1)
+const validatePublicApiOrigin = (req: Request, res: Response, next: NextFunction) => {
+  const origin = (req.headers['origin'] || req.headers['referer'] || '').toString().toLowerCase();
+  if (!origin) return next();
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  const strictProductionOrigins = ['https://cuantovale.es', 'https://www.cuantovale.es'];
+  const stagingOrigins = ['.netlify.app', '.run.app', 'localhost:3000', '127.0.0.1:3000'];
+
+  if (isProduction) {
+    const isAllowed = strictProductionOrigins.some(prod => origin.startsWith(prod) || origin.includes('cuantovale.es'));
+    if (!isAllowed) {
+      console.warn(`[CuántoVale Security] Production origin blocked: ${origin}`);
+      return res.status(403).json({ error: 'Origen no autorizado en producción.' });
+    }
+  } else {
+    const isAllowed = [...strictProductionOrigins, ...stagingOrigins].some(allowed => origin.includes(allowed));
+    if (!isAllowed) {
+      console.warn(`[CuántoVale Security] Staging origin blocked: ${origin}`);
+      return res.status(403).json({ error: 'Origen no autorizado.' });
+    }
+  }
+
+  next();
+};
+
 // ----------------------------------------------------
 // PUBLIC HEALTH CHECK & OBSERVABILITY (Requirement 19 & 20)
 // ----------------------------------------------------
@@ -253,7 +276,7 @@ app.get('/api/pricing', (_req: Request, res: Response) => {
 });
 
 // 3. Lead Submission with Server-Side Validation, Honeypot, UTM Capture & Concurrency-Safe Storage
-app.post('/api/leads', rateLimitLeads, async (req: Request, res: Response) => {
+app.post('/api/leads', rateLimitLeads, validatePublicApiOrigin, async (req: Request, res: Response) => {
   try {
     const {
       service,
@@ -433,7 +456,7 @@ app.get('/api/admin/leads/:id', async (req: Request, res: Response) => {
 // Update lead status & economic metrics (Requirement 5, 7, 8, 20)
 app.patch('/api/admin/leads/:id', async (req: Request, res: Response) => {
   try {
-    const { status, invalid_reason, quoted_value, final_value, payment_status, lead_price, is_pilot } = req.body;
+    const { status, invalid_reason, quoted_value, final_value, payment_status, lead_price, is_pilot, record_type } = req.body;
     const updates: Partial<Lead> = {};
     if (status) updates.status = status;
     if (invalid_reason !== undefined) updates.invalid_reason = invalid_reason;
@@ -442,6 +465,7 @@ app.patch('/api/admin/leads/:id', async (req: Request, res: Response) => {
     if (payment_status !== undefined) updates.payment_status = payment_status;
     if (lead_price !== undefined) updates.lead_price = lead_price;
     if (is_pilot !== undefined) updates.is_pilot = is_pilot;
+    if (record_type !== undefined) updates.record_type = record_type;
 
     const lead = await updateLead(req.params.id, updates, 'admin_operator');
     if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
@@ -628,8 +652,8 @@ ${INDEXABLE_CLUSTER_URLS.map(
 ).join('\n')}
 </urlset>`;
 
-  res.header('Content-Type', 'application/xml');
-  res.send(xml);
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.status(200).send(xml);
 });
 
 app.get('/robots.txt', (_req: Request, res: Response) => {
@@ -640,8 +664,8 @@ Disallow: /api/
 
 Sitemap: https://cuantovale.es/sitemap.xml
 `;
-  res.header('Content-Type', 'text/plain');
-  res.send(robots);
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.status(200).send(robots);
 });
 
 // ----------------------------------------------------

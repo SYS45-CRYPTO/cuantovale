@@ -1,5 +1,4 @@
 # CuántoVale.es - Netlify Deployment & Proxy Configuration
-# Architecture Option B: Static Frontend / Prerender on Netlify + API Proxy to Cloud Run Backend
 
 [build]
   command = "npm run build"
@@ -9,7 +8,7 @@
   SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES = "AIzaSyD6-GdZ9lo-6VWlHfMMHzL8OIgOdd6nPkI"
   SECRETS_SCAN_OMIT_KEYS = "apiKey,VITE_FIREBASE_API_KEY"
 
-# API Proxy Rewrite (Status 200 same-origin proxy to Cloud Run backend)
+# 1. API Proxy Rewrite (Status 200 same-origin proxy to Cloud Run backend - Priority 1)
 [[redirects]]
   from = "/api/*"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/api/:splat"
@@ -17,7 +16,21 @@
   force = true
   headers = { X-From = "Netlify-Proxy" }
 
-# Admin Console Proxy Rewrite
+# 2. Sitemap XML Proxy
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/sitemap.xml"
+  status = 200
+  force = true
+
+# 3. Robots TXT Proxy
+[[redirects]]
+  from = "/robots.txt"
+  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/robots.txt"
+  status = 200
+  force = true
+
+# 4. Admin Console Proxy Rewrite
 [[redirects]]
   from = "/admin"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/admin"
@@ -30,33 +43,30 @@
   status = 200
   force = true
 
-# Public Sitemap and Robots pass-through
-[[redirects]]
-  from = "/sitemap.xml"
-  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/sitemap.xml"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/robots.txt"
-  to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/robots.txt"
-  status = 200
-  force = true
-
-# Catch-all SSR proxy rewrite to Cloud Run Express backend (Static assets in dist/assets served directly by Netlify CDN)
+# 5. Catch-all SSR proxy rewrite to Cloud Run Express backend (placed LAST)
 [[redirects]]
   from = "/*"
   to = "https://ais-pre-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/:splat"
   status = 200
 
-# Global Security & Pre-Launch Indexation Lock Headers
+# Global Security Headers
 [[headers]]
   for = "/*"
   [headers.values]
-    X-Robots-Tag = "noindex, nofollow"
     X-Frame-Options = "SAMEORIGIN"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Explicit Content-Type Headers
+[[headers]]
+  for = "/sitemap.xml"
+  [headers.values]
+    Content-Type = "application/xml; charset=utf-8"
+
+[[headers]]
+  for = "/robots.txt"
+  [headers.values]
+    Content-Type = "text/plain; charset=utf-8"
 
 # Strict Disallow on Admin & API Routes
 [[headers]]
@@ -64,3 +74,8 @@
   [headers.values]
     X-Robots-Tag = "noindex, nofollow"
     Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/api*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
