@@ -58,6 +58,7 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
   const [submittedLead, setSubmittedLead] = useState<Lead | null>(null);
 
   // Auto-infer province from postcode input
@@ -106,26 +107,32 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
   const handleSubmitFinal = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setFieldErrors({});
 
     if (formData.website_hp) {
       onClose();
       return;
     }
 
-    if (!formData.name.trim()) {
-      setErrorMsg('Por favor, indica tu nombre.');
-      return;
+    // Client-side pre-validation (Requirements 7, 8, 12 & 15)
+    const errors: { [key: string]: string } = {};
+    if (!formData.name || formData.name.trim().length < 2) {
+      errors.name = 'Introduce un nombre válido (mínimo 2 caracteres).';
     }
-    if (!formData.phone.trim() || formData.phone.length < 8) {
-      setErrorMsg('Por favor, indica un teléfono de contacto válido.');
-      return;
+    const cleanPhone = (formData.phone || '').trim().replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 8) {
+      errors.phone = 'Revisa el número de teléfono.';
     }
-    if (!formData.email.trim() || !formData.email.includes('@')) {
-      setErrorMsg('Por favor, indica un correo electrónico válido.');
-      return;
+    if (!formData.email || !formData.email.includes('@') || !formData.email.includes('.')) {
+      errors.email = 'Revisa el correo electrónico.';
     }
     if (!formData.consent_accepted) {
-      setErrorMsg('Debes aceptar las condiciones y la transmisión a un máximo de 2 empresas homologadas.');
+      errors.consent_accepted = 'Necesitamos tu autorización para tramitar la solicitud.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setErrorMsg('Por favor revisa los campos marcados en rojo.');
       return;
     }
 
@@ -147,11 +154,11 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
       approx_square_meters: Number(formData.approx_square_meters),
       need_status: formData.need_status,
       timeframe: formData.timeframe,
-      name: formData.name,
-      company: formData.company,
-      phone: formData.phone,
-      email: formData.email,
-      comments: formData.comments,
+      name: formData.name.trim(),
+      company: formData.company && formData.company.trim().length > 0 ? formData.company.trim() : undefined,
+      phone: formData.phone.trim(),
+      email: formData.email.trim().toLowerCase(),
+      comments: formData.comments && formData.comments.trim().length > 0 ? formData.comments.trim() : undefined,
       dynamic_fields: {
         structure_type: formData.structure_type,
         required_fire_resistance: formData.required_fire_resistance,
@@ -190,8 +197,17 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Error al registrar la solicitud');
+        const errData = await response.json().catch(() => null);
+        if (errData && errData.error === 'VALIDATION_ERROR' && errData.field && errData.message) {
+          setFieldErrors({ [errData.field]: errData.message });
+          throw new Error(errData.message);
+        } else if (response.status === 404) {
+          throw new Error('No hemos podido conectar con el servicio de registro. Por favor inténtalo de nuevo.');
+        } else if (errData && errData.message) {
+          throw new Error(errData.message);
+        } else {
+          throw new Error('No hemos podido registrar la solicitud. Inténtalo de nuevo.');
+        }
       }
 
       const resData = await response.json();
@@ -204,10 +220,10 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
         }
         trackEvent('lead_submit', { service: formData.service, province: formData.province });
       } else {
-        throw new Error('Error al registrar la solicitud');
+        throw new Error('No hemos podido registrar la solicitud. Inténtalo de nuevo.');
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'No se pudo enviar la solicitud. Por favor inténtalo de nuevo.');
+      setErrorMsg(err.message || 'No hemos podido registrar la solicitud. Inténtalo de nuevo.');
     } finally {
       setLoading(false);
     }
@@ -237,7 +253,7 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                 Referencia: {submittedLead.lead_id}
               </h2>
               <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
-                Hemos registrado tus parámetros técnicos. Un máximo de 2 instaladores autorizados revisarán la viabilidad en <strong>{submittedLead.province}</strong>.
+                Hemos registrado tus parámetros técnicos. Un máximo de 2 empresas especializadas y, cuando corresponda, habilitadas revisarán la viabilidad en <strong>{submittedLead.province}</strong>.
               </p>
             </div>
             <div className="pt-4 border-t border-slate-100">
@@ -472,9 +488,15 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                       required
                       placeholder="ej. Carlos García"
                       value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500"
+                      onChange={(e) => {
+                        setFormData({ ...formData, name: e.target.value });
+                        if (fieldErrors.name) setFieldErrors({ ...fieldErrors, name: '' });
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl border ${fieldErrors.name ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'} focus:outline-none focus:border-blue-500`}
                     />
+                    {fieldErrors.name && (
+                      <p className="text-[11px] text-rose-600 mt-1 font-medium">{fieldErrors.name}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-slate-700 font-semibold mb-1">Empresa / Razón Social:</label>
@@ -496,9 +518,15 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                       required
                       placeholder="ej. 600123456"
                       value={formData.phone}
-                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                      onChange={(e) => {
+                        setFormData({ ...formData, phone: e.target.value });
+                        if (fieldErrors.phone) setFieldErrors({ ...fieldErrors, phone: '' });
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl border ${fieldErrors.phone ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'} focus:outline-none focus:border-blue-500 font-mono`}
                     />
+                    {fieldErrors.phone && (
+                      <p className="text-[11px] text-rose-600 mt-1 font-medium">{fieldErrors.phone}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-slate-700 font-semibold mb-1">Correo Electrónico *:</label>
@@ -507,9 +535,15 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                       required
                       placeholder="ej. carlos@empresa.com"
                       value={formData.email}
-                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500"
+                      onChange={(e) => {
+                        setFormData({ ...formData, email: e.target.value });
+                        if (fieldErrors.email) setFieldErrors({ ...fieldErrors, email: '' });
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl border ${fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : 'border-slate-200'} focus:outline-none focus:border-blue-500`}
                     />
+                    {fieldErrors.email && (
+                      <p className="text-[11px] text-rose-600 mt-1 font-medium">{fieldErrors.email}</p>
+                    )}
                   </div>
                 </div>
 
@@ -517,7 +551,7 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                   <label className="block text-slate-700 font-semibold mb-1">Observaciones adicionales (Opcional):</label>
                   <textarea
                     rows={2}
-                    placeholder="ej. Necesitamos certificado visado para superar inspección municipal..."
+                    placeholder="Ej. Nos han solicitado documentación técnica antes de poner en marcha la actividad."
                     value={formData.comments}
                     onChange={(e) => setFormData({ ...formData, comments: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-blue-500 text-xs"
@@ -530,13 +564,19 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
                     <input
                       type="checkbox"
                       checked={formData.consent_accepted}
-                      onChange={(e) => setFormData({ ...formData, consent_accepted: e.target.checked })}
+                      onChange={(e) => {
+                        setFormData({ ...formData, consent_accepted: e.target.checked });
+                        if (fieldErrors.consent_accepted) setFieldErrors({ ...fieldErrors, consent_accepted: '' });
+                      }}
                       className="mt-0.5 rounded border-slate-300 accent-blue-600 shrink-0"
                     />
                     <span>
-                      Acepto la <a href="/privacidad/" target="_blank" className="text-blue-600 underline">política de privacidad</a> y la transmisión de los datos técnicos a un <strong>máximo de 2 empresas instaladoras autorizadas</strong> en mi provincia.
+                      Acepto la <a href="/privacidad/" target="_blank" className="text-blue-600 underline">política de privacidad</a> y la transmisión de los datos técnicos a un <strong>máximo de 2 empresas especializadas y, cuando corresponda, habilitadas</strong> en mi provincia.
                     </span>
                   </label>
+                  {fieldErrors.consent_accepted && (
+                    <p className="text-[11px] text-rose-600 font-medium pl-5">{fieldErrors.consent_accepted}</p>
+                  )}
                 </div>
 
                 <div className="flex gap-2 pt-2">

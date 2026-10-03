@@ -316,18 +316,34 @@ app.post('/api/leads', rateLimitLeads, validatePublicApiOrigin, async (req: Requ
       return res.status(200).json({ success: true, message: 'Solicitud procesada.' });
     }
 
-    // Server-side validations
+    // Server-side validations with structured error contract (Requirement 8, 12 & 15)
     if (!name || typeof name !== 'string' || name.trim().length < 2) {
-      return res.status(400).json({ error: 'Nombre obligatorio.' });
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        field: 'name',
+        message: 'Introduce un nombre válido (mínimo 2 caracteres).'
+      });
     }
-    if (!phone || typeof phone !== 'string' || phone.trim().length < 8) {
-      return res.status(400).json({ error: 'Teléfono de contacto no válido.' });
+    if (!phone || typeof phone !== 'string' || phone.trim().replace(/\D/g, '').length < 8) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        field: 'phone',
+        message: 'Revisa el número de teléfono.'
+      });
     }
-    if (!email || !email.includes('@') || !email.includes('.')) {
-      return res.status(400).json({ error: 'Email de contacto no válido.' });
+    if (!email || typeof email !== 'string' || !email.includes('@') || !email.includes('.')) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        field: 'email',
+        message: 'Revisa el correo electrónico.'
+      });
     }
     if (!consent_accepted) {
-      return res.status(400).json({ error: 'Debes aceptar la cesión a un máximo de 2 empresas homologadas.' });
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        field: 'consent_accepted',
+        message: 'Necesitamos tu autorización para tramitar la solicitud.'
+      });
     }
 
     const leadPayload: Omit<Lead, 'lead_id' | 'created_at'> = {
@@ -339,10 +355,10 @@ app.post('/api/leads', rateLimitLeads, validatePublicApiOrigin, async (req: Requ
       need_status: need_status || 'adecuacion',
       timeframe: timeframe || 'menos_1_mes',
       name: name.trim(),
-      company: company ? company.trim() : undefined,
+      company: company && typeof company === 'string' && company.trim().length > 0 ? company.trim() : undefined,
       phone: phone.trim(),
       email: email.trim().toLowerCase(),
-      comments: comments ? comments.trim() : undefined,
+      comments: comments && typeof comments === 'string' && comments.trim().length > 0 ? comments.trim() : undefined,
       dynamic_fields: dynamic_fields || {},
       attachment_notes: attachment_notes || undefined,
       source_page: source_page || '/',
@@ -369,17 +385,24 @@ app.post('/api/leads', rateLimitLeads, validatePublicApiOrigin, async (req: Requ
 
     const newLead = await createLead(leadPayload);
 
-    // Dispatch Transactional Email (with fallback audit log)
+    // Requirement 12: Dispatch Transactional Email asynchronously in background (isolated, does not block lead creation)
     dispatchLeadConfirmationEmail(newLead).catch(err => {
-      console.error('[CuántoVale Email] Background dispatch failed:', err.message);
+      console.error('[CuántoVale Email] Background dispatch failed (non-blocking):', err.message);
     });
 
-    console.log(`[CuántoVale Lead] Created: ${newLead.lead_id} (${newLead.service} en ${newLead.province})`);
+    console.log(`[CuántoVale Lead] Created successfully: ${newLead.lead_id} (${newLead.service} en ${newLead.province})`);
 
     res.status(201).json({ success: true, lead: newLead });
   } catch (err: any) {
-    console.error('[CuántoVale Lead] Submission error:', err.message);
-    res.status(500).json({ error: 'Error al registrar la solicitud.' });
+    const requestId = `req-${crypto.randomUUID()}`;
+    const errorCode = err.code || 'FIRESTORE_WRITE_FAILURE';
+    console.error(`[CuántoVale Lead] Submission error (RequestID: ${requestId}, Code: ${errorCode}):`, err.message);
+    res.status(503).json({
+      error: 'SERVICE_UNAVAILABLE',
+      request_id: requestId,
+      error_code: errorCode,
+      message: 'No se ha podido persistir la solicitud en Firestore. Inténtalo de nuevo.'
+    });
   }
 });
 
@@ -395,22 +418,27 @@ app.post('/api/admin/auth/login', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Clave de acceso de operador incorrecta.' });
   }
 
-  const rawSessionId = `cv_sid_${crypto.randomUUID()}`;
-  await createAdminSessionFirestore(rawSessionId, 'operator-abdel');
+  try {
+    const rawSessionId = `cv_sid_${crypto.randomUUID()}`;
+    await createAdminSessionFirestore(rawSessionId, 'operator-abdel');
 
-  // Set secure SameSite=Lax HttpOnly session cookie (12h duration)
-  res.cookie('cv_admin_session', rawSessionId, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 12 * 60 * 60 * 1000 // 12 hours
-  });
+    // Set secure SameSite=Lax HttpOnly session cookie (12h duration)
+    res.cookie('cv_admin_session', rawSessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 12 * 60 * 60 * 1000 // 12 hours
+    });
 
-  res.json({
-    success: true,
-    message: 'Sesión administrativa iniciada y registrada en Firestore.'
-  });
+    res.json({
+      success: true,
+      message: 'Sesión administrativa iniciada y registrada en Firestore.'
+    });
+  } catch (err: any) {
+    console.error('[CuántoVale Sessions] Admin login failed to persist session in Firestore:', err.message);
+    res.status(503).json({ error: 'No se pudo crear la sesión persistente en Firestore.' });
+  }
 });
 
 // Admin Logout Route (Revokes Session in Firestore & clears cookie)

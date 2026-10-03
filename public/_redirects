@@ -1,0 +1,5 @@
+/api/admin/*  https://ais-dev-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/api/admin/:splat  200!
+/api/*  https://ais-dev-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/api/:splat  200!
+/admin  /admin/index.html  200
+/admin/*  /admin/index.html  200
+/*  https://ais-dev-ith2aypbi7deopcakmk6so-921734783716.europe-west2.run.app/:splat  200
