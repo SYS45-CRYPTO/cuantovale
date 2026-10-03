@@ -28,7 +28,7 @@ import {
   revokeAdminSessionFirestore
 } from './src/server/db.js';
 import { dispatchLeadConfirmationEmail } from './src/server/email.js';
-import { Lead, Provider, AnalyticsEvent, CalculatorIgnifugacionInputs } from './src/types/index.js';
+import { Lead, LeadStatus, Provider, AnalyticsEvent, CalculatorIgnifugacionInputs } from './src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,6 +135,14 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Ensure Cache-Control: no-store for all /api endpoints (Requirement 17)
+app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 // Anti-Spam Rate Limiter for Public Leads
 const ipSubmissionTimestamps = new Map<string, number[]>();
 
@@ -156,27 +164,20 @@ const rateLimitLeads = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-// Admin Authentication Middleware (Requirement 15 & 16)
-// Supports HttpOnly session cookie cv_admin_session, x-admin-key / x-admin-session header, or Bearer token
+// Admin Authentication Middleware (Strict Production Requirement: SESSION COOKIE ONLY)
+// The ONLY valid authentication mechanism for /api/admin/* is the HttpOnly cv_admin_session cookie.
+// Static bearer tokens, x-admin-key headers, and master token bypasses are strictly eliminated.
 const requireAdminAuth = async (req: Request, res: Response, next: NextFunction) => {
   const cookieSession = req.cookies?.cv_admin_session;
-  const adminKeyHeader = req.headers['x-admin-key'] || req.headers['x-admin-session'];
-  const authHeader = req.headers['authorization'];
-  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
-  const providedSessionId = (cookieSession as string) || (adminKeyHeader as string) || bearerToken;
-
-  if (!providedSessionId) {
+  if (!cookieSession || typeof cookieSession !== 'string') {
     return res.status(401).json({
-      error: 'No autorizado. Se requiere sesión de administrador (HTTP 401).'
+      error: 'No autorizado. Se requiere sesión de administrador (cookie cv_admin_session requerida - HTTP 401).'
     });
   }
 
-  // Allow direct master key comparison for automated test scripts / CLI
-  let isValid = providedSessionId === ADMIN_SECRET_KEY;
-  if (!isValid) {
-    isValid = await isValidAdminSessionFirestore(providedSessionId);
-  }
+  // Validate session against persistent server session store in Firestore
+  const isValid = await isValidAdminSessionFirestore(cookieSession);
 
   if (!isValid) {
     return res.status(401).json({
@@ -361,7 +362,9 @@ app.post('/api/leads', rateLimitLeads, validatePublicApiOrigin, async (req: Requ
       consent_version: '2026-v1',
       status: 'NEW',
       lead_model: 'SHARED',
-      assigned_provider_ids: []
+      assigned_provider_ids: [],
+      // Requirement 6: Server sets record_type = 'PRODUCTION_REAL' unconditionally
+      record_type: 'PRODUCTION_REAL'
     };
 
     const newLead = await createLead(leadPayload);
@@ -454,22 +457,83 @@ app.get('/api/admin/leads/:id', async (req: Request, res: Response) => {
   }
 });
 
-// Update lead status & economic metrics (Requirement 5, 7, 8, 20)
+const VALID_LEAD_STATUSES: LeadStatus[] = [
+  'NEW',
+  'VERIFICATION_PENDING',
+  'VERIFIED',
+  'ROUTED',
+  'ACCEPTED',
+  'CONTACTED',
+  'QUOTE_ISSUED',
+  'WON',
+  'LOST',
+  'INVALID'
+];
+
+function parseValidNonNegativeNumber(val: any, fieldName: string): number | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  const num = Number(val);
+  if (!Number.isFinite(num) || isNaN(num) || num < 0) {
+    throw new Error(`El campo '${fieldName}' debe ser un número finito no negativo.`);
+  }
+  return num;
+}
+
+// Update lead status & economic metrics (Requirement 2, 5, 7, 8, 9, 10, 11, 12, 13)
 app.patch('/api/admin/leads/:id', async (req: Request, res: Response) => {
   try {
-    const { status, invalid_reason, quoted_value, final_value, payment_status, lead_price, is_pilot, record_type } = req.body;
-    const updates: Partial<Lead> = {};
-    if (status) updates.status = status;
-    if (invalid_reason !== undefined) updates.invalid_reason = invalid_reason;
-    if (quoted_value !== undefined) updates.quoted_value = quoted_value;
-    if (final_value !== undefined) updates.final_value = final_value;
-    if (payment_status !== undefined) updates.payment_status = payment_status;
-    if (lead_price !== undefined) updates.lead_price = lead_price;
-    if (is_pilot !== undefined) updates.is_pilot = is_pilot;
-    if (record_type !== undefined) updates.record_type = record_type;
+    const {
+      status,
+      invalid_reason,
+      quoted_value,
+      quote_amount,
+      final_value,
+      won_at,
+      revenue_amount,
+      payment_status,
+      lead_price,
+      is_pilot,
+      record_type,
+      assigned_provider_ids
+    } = req.body;
 
-    const lead = await updateLead(req.params.id, updates, 'admin_operator');
-    if (!lead) return res.status(404).json({ error: 'Lead no encontrado' });
+    const updates: Partial<Lead> = {};
+
+    // Requirement 12: Validate statuses server-side
+    if (status !== undefined) {
+      if (!VALID_LEAD_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `Estado inválido: '${status}'.` });
+      }
+      updates.status = status;
+    } else if (final_value !== undefined && Number(final_value) > 0) {
+      updates.status = 'WON';
+    }
+
+    // Requirement 11: Validate economic fields
+    try {
+      if (quoted_value !== undefined) updates.quoted_value = parseValidNonNegativeNumber(quoted_value, 'quoted_value');
+      if (quote_amount !== undefined) updates.quote_amount = parseValidNonNegativeNumber(quote_amount, 'quote_amount');
+      if (final_value !== undefined) updates.final_value = parseValidNonNegativeNumber(final_value, 'final_value');
+      if (revenue_amount !== undefined) updates.revenue_amount = parseValidNonNegativeNumber(revenue_amount, 'revenue_amount');
+      if (lead_price !== undefined) updates.lead_price = parseValidNonNegativeNumber(lead_price, 'lead_price');
+    } catch (valErr: any) {
+      return res.status(400).json({ error: valErr.message });
+    }
+
+    if (invalid_reason !== undefined) updates.invalid_reason = invalid_reason;
+    if (payment_status !== undefined) updates.payment_status = payment_status;
+    if (is_pilot !== undefined) updates.is_pilot = !!is_pilot;
+    if (record_type !== undefined) updates.record_type = record_type;
+    if (assigned_provider_ids !== undefined) {
+      if (!Array.isArray(assigned_provider_ids)) {
+        return res.status(400).json({ error: 'assigned_provider_ids debe ser un array.' });
+      }
+      updates.assigned_provider_ids = assigned_provider_ids;
+    }
+
+    const adminSessionId = req.cookies?.cv_admin_session || 'operator_session';
+    const lead = await updateLead(req.params.id, updates, String(adminSessionId));
+    if (!lead) return res.status(404).json({ error: 'Lead no encontrado.' });
 
     res.json({ success: true, lead });
   } catch (err: any) {

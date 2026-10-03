@@ -1,18 +1,5 @@
-import { initializeApp, getApps } from 'firebase/app';
-import {
-  getFirestore,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  query,
-  where,
-  orderBy,
-  limit,
-  Firestore
-} from 'firebase/firestore';
+import { initializeApp, getApps, App } from 'firebase-admin/app';
+import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -24,31 +11,44 @@ import { Lead, Provider, ProviderInteraction, LeadStatus, LeadStatusHistory, Ana
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Read firebase-applet-config.json
-let db: Firestore;
+// ----------------------------------------------------
+// FIREBASE ADMIN SDK INITIALIZATION VIA ADC
+// ----------------------------------------------------
+let db: Firestore | null = null;
+let adminApp: App | null = null;
 let isFirestoreReady = false;
 
 try {
   const configPath = path.resolve(__dirname, '..', '..', 'firebase-applet-config.json');
+  let projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+  let databaseId = '(default)';
+
   if (fs.existsSync(configPath)) {
     const rawConfig = fs.readFileSync(configPath, 'utf-8');
     const firebaseConfig = JSON.parse(rawConfig);
-
-    const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-    
-    // Support custom database ID if present in config
+    projectId = firebaseConfig.projectId || projectId;
     if (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)') {
-      db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    } else {
-      db = getFirestore(app);
+      databaseId = firebaseConfig.firestoreDatabaseId;
     }
-    isFirestoreReady = true;
-    console.log(`[CuántoVale Firestore] Initialized with project ${firebaseConfig.projectId}`);
-  } else {
-    console.warn('[CuántoVale Firestore] firebase-applet-config.json not found');
   }
+
+  if (getApps().length === 0) {
+    adminApp = initializeApp({
+      projectId
+    });
+  } else {
+    adminApp = getApps()[0];
+  }
+
+  if (databaseId && databaseId !== '(default)') {
+    db = getFirestore(adminApp, databaseId);
+  } else {
+    db = getFirestore(adminApp);
+  }
+  isFirestoreReady = true;
+  console.log(`[CuántoVale Firestore] Firebase Admin SDK initialized with ADC (Project: ${projectId}, Database: ${databaseId})`);
 } catch (err) {
-  console.error('[CuántoVale Firestore] Failed to initialize Firestore SDK:', err);
+  console.error('[CuántoVale Firestore] Failed to initialize Firebase Admin SDK:', err);
 }
 
 // Helper to remove any undefined properties recursively before sending to Firestore
@@ -85,26 +85,28 @@ INITIAL_PROVIDERS.forEach(p => memoryProviders.set(p.provider_id, {
   record_type: 'SEED',
   stated_wtp_shared: null,
   stated_wtp_exclusive: null,
-  interactions: []
+  coverage_provinces: ['Madrid', 'Toledo', 'Guadalajara']
 }));
+
 INITIAL_LEADS.forEach(l => memoryLeads.set(l.lead_id, {
   ...l,
-  record_type: 'SEED'
+  record_type: 'SEED',
+  lead_model: 'SHARED',
+  assigned_provider_ids: []
 }));
 
-// ----------------------------------------------------
-// MIGRATION & BOOTSTRAP LOGIC (Requirement 4 & 24)
-// ----------------------------------------------------
+// Bootstrap Database collections
 export async function bootstrapDatabase(): Promise<void> {
-  if (!isFirestoreReady || !db) return;
+  if (!isFirestoreReady || !db) {
+    console.log('[CuántoVale DB] Firestore not ready, running with memory store');
+    return;
+  }
 
   try {
-    // 1. Seed or sync providers
-    const provCol = collection(db, 'providers');
-    const provSnapshot = await getDocs(provCol);
-    
-    if (provSnapshot.empty) {
-      console.log('[CuántoVale DB] Bootstrapping providers collection into Firestore...');
+    // 1. Providers Check & Seed
+    const provSnapshot = await db.collection('providers').limit(1).get().catch(() => null);
+    if (!provSnapshot || provSnapshot.empty) {
+      console.log('[CuántoVale DB] Seeding initial providers to Firestore...');
       for (const prov of INITIAL_PROVIDERS) {
         const provData: Provider = {
           ...prov,
@@ -113,50 +115,44 @@ export async function bootstrapDatabase(): Promise<void> {
           record_type: 'SEED',
           stated_wtp_shared: null,
           stated_wtp_exclusive: null,
-          interactions: [],
+          coverage_provinces: ['Madrid', 'Toledo', 'Guadalajara'],
           active_leads_count: 0
         };
-        await setDoc(doc(db, 'providers', prov.provider_id), provData);
+        await db.collection('providers').doc(prov.provider_id).set(provData, { merge: true }).catch(() => {});
         memoryProviders.set(prov.provider_id, provData);
       }
     } else {
-      provSnapshot.docs.forEach(d => {
-        const p = d.data() as Provider;
-        memoryProviders.set(p.provider_id, p);
-      });
-      console.log(`[CuántoVale DB] Loaded ${provSnapshot.size} providers from Firestore`);
+      const allProv = await db.collection('providers').get().catch(() => null);
+      if (allProv) {
+        allProv.forEach(d => {
+          const p = d.data() as Provider;
+          memoryProviders.set(p.provider_id, p);
+        });
+        console.log(`[CuántoVale DB] Loaded ${allProv.size} providers from Firestore`);
+      }
     }
 
-    // 2. Check and migrate local JSON leads from /data/db if they exist
-    const localDbFile = path.resolve(__dirname, '..', '..', 'data', 'db', 'leads.json');
-    let diskLeads: Lead[] = [];
-    if (fs.existsSync(localDbFile)) {
-      try {
-        diskLeads = JSON.parse(fs.readFileSync(localDbFile, 'utf-8'));
-      } catch {}
-    }
-
-    const leadsCol = collection(db, 'leads');
-    const leadsSnapshot = await getDocs(query(leadsCol, limit(1)));
-
-    if (leadsSnapshot.empty) {
+    // 2. Leads Check & Seed
+    const leadsSnapshot = await db.collection('leads').limit(1).get().catch(() => null);
+    if (!leadsSnapshot || leadsSnapshot.empty) {
       console.log('[CuántoVale DB] Migrating initial leads to Firestore...');
-      const sourceLeads = diskLeads.length > 0 ? diskLeads : INITIAL_LEADS;
-      for (const lead of sourceLeads) {
+      for (const lead of INITIAL_LEADS) {
         const taggedLead: Lead = {
           ...lead,
           record_type: lead.record_type || 'SEED'
         };
-        await setDoc(doc(db, 'leads', lead.lead_id), taggedLead);
+        await db.collection('leads').doc(lead.lead_id).set(taggedLead).catch(() => {});
         memoryLeads.set(lead.lead_id, taggedLead);
       }
     } else {
-      const allLeadsSnapshot = await getDocs(leadsCol);
-      allLeadsSnapshot.docs.forEach(d => {
-        const l = d.data() as Lead;
-        memoryLeads.set(l.lead_id, l);
-      });
-      console.log(`[CuántoVale DB] Loaded ${allLeadsSnapshot.size} leads from Firestore`);
+      const allLeads = await db.collection('leads').get().catch(() => null);
+      if (allLeads) {
+        allLeads.forEach(d => {
+          const l = d.data() as Lead;
+          memoryLeads.set(l.lead_id, l);
+        });
+        console.log(`[CuántoVale DB] Loaded ${allLeads.size} leads from Firestore`);
+      }
     }
   } catch (err) {
     console.error('[CuántoVale DB] Error during bootstrap:', err);
@@ -173,21 +169,17 @@ export async function pingDatabase(): Promise<{ ok: boolean; latencyMs: number }
     return { ok: true, latencyMs: 0 };
   }
   try {
-    const provCol = collection(db, 'providers');
-    await getDocs(query(provCol, limit(1)));
+    await db.collection('providers').limit(1).get();
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
-    console.error('[CuántoVale DB] Ping error:', err);
     return { ok: false, latencyMs: Date.now() - start };
   }
 }
 
 // Create Lead (Multi-instance safe ID + audit trail)
 export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>): Promise<Lead> {
-  // Concurrency-safe ID generation (UUID + readable human reference code)
   const uuid = crypto.randomUUID();
   const year = new Date().getFullYear();
-  const humanRef = `CV-${year}-${uuid.slice(0, 8).toUpperCase()}`;
   const leadId = `lead-${year}-${uuid.slice(0, 8)}`;
 
   const newLead: Lead = {
@@ -202,7 +194,7 @@ export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>)
   if (isFirestoreReady && db) {
     try {
       const sanitizedLead = sanitizeForFirestore(newLead);
-      await setDoc(doc(db, 'leads', leadId), sanitizedLead);
+      await db.collection('leads').doc(leadId).set(sanitizedLead);
       
       // Record initial history
       const historyEntry: LeadStatusHistory = {
@@ -211,12 +203,12 @@ export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>)
         previous_status: null,
         new_status: 'NEW',
         changed_by: 'system_submission',
-        notes: `Solicitud registrada desde ${leadData.source_page || '/'}`,
+        notes: `Solicitud registrada desde ${newLead.source_page || '/'}`,
         timestamp: new Date().toISOString()
       };
-      await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), sanitizeForFirestore(historyEntry));
+      await db.collection('lead_status_history').doc(historyEntry.history_id).set(sanitizeForFirestore(historyEntry));
     } catch (err) {
-      console.error('[CuántoVale DB] Error inserting lead into Firestore:', err);
+      console.error('[CuántoVale DB] Failed to save lead to Firestore, saving to memory fallback:', err);
     }
   }
 
@@ -228,12 +220,12 @@ export async function createLead(leadData: Omit<Lead, 'lead_id' | 'created_at'>)
 export function resolveRecordType(l: Partial<Lead>): 'PRODUCTION_REAL' | 'QA' | 'SEED' | 'SIMULATION' {
   if (l.record_type) return l.record_type;
   if (l.lead_id && l.lead_id.startsWith('lead-2026-08')) return 'SEED';
-  if (l.name && (l.name.includes('Concurrente') || l.name.includes('Test') || l.name.includes('QA'))) return 'QA';
-  if (l.email && (l.email.includes('test') || l.email.includes('example'))) return 'QA';
-  return 'SEED';
+  if (l.name && (l.name.includes('QA') || l.name.toLowerCase().includes('qa test'))) return 'QA';
+  if (l.email && l.email.toLowerCase().includes('qa@')) return 'QA';
+  return 'PRODUCTION_REAL';
 }
 
-// Get Leads with optional filters (Requirement 2 & 24)
+// Get Leads with optional filters
 export async function getLeads(filters?: { status?: string; province?: string; record_type?: string }): Promise<Lead[]> {
   const mergedMap = new Map<string, Lead>();
 
@@ -244,9 +236,8 @@ export async function getLeads(filters?: { status?: string; province?: string; r
 
   if (isFirestoreReady && db) {
     try {
-      const leadsCol = collection(db, 'leads');
-      const snapshot = await getDocs(leadsCol);
-      snapshot.docs.forEach(d => {
+      const snapshot = await db.collection('leads').get();
+      snapshot.forEach(d => {
         const data = d.data() as Lead;
         mergedMap.set(data.lead_id, {
           ...data,
@@ -280,12 +271,12 @@ export async function getLeadById(leadId: string): Promise<Lead | null> {
   }
   if (isFirestoreReady && db) {
     try {
-      const docRef = doc(db, 'leads', leadId);
-      const snapshot = await getDoc(docRef);
-      if (snapshot.exists()) {
+      const snapshot = await db.collection('leads').doc(leadId).get();
+      if (snapshot.exists) {
         const data = snapshot.data() as Lead;
-        memoryLeads.set(leadId, data);
-        return data;
+        const resolvedLead = { ...data, record_type: resolveRecordType(data) };
+        memoryLeads.set(leadId, resolvedLead);
+        return resolvedLead;
       }
     } catch (err) {
       console.error('[CuántoVale DB] Error getting lead by ID from Firestore:', err);
@@ -294,7 +285,7 @@ export async function getLeadById(leadId: string): Promise<Lead | null> {
   return null;
 }
 
-// Update Lead Status with History Audit Trail (Requirement 5)
+// Update Lead Status with History Audit Trail
 export async function updateLead(
   leadId: string,
   updates: Partial<Lead>,
@@ -304,12 +295,35 @@ export async function updateLead(
   if (!currentLead) return null;
 
   const previousStatus = currentLead.status;
-  const updatedLead: Lead = { ...currentLead, ...updates };
+  const now = new Date().toISOString();
+
+  const mergedUpdates: Partial<Lead> = {
+    ...updates,
+    updated_at: now
+  };
+
+  if (updates.status === 'WON' || currentLead.status === 'WON') {
+    // won_at is set upon first transition into WON and preserved thereafter
+    if (currentLead.won_at) {
+      mergedUpdates.won_at = currentLead.won_at;
+    } else {
+      mergedUpdates.won_at = updates.won_at || now;
+    }
+
+    // Clear separation between project cost and CuántoVale revenue
+    mergedUpdates.revenue_amount = updates.revenue_amount !== undefined 
+      ? updates.revenue_amount 
+      : (currentLead.revenue_amount !== undefined ? currentLead.revenue_amount : (currentLead.lead_price || 50));
+    mergedUpdates.quote_amount = updates.quote_amount ?? updates.quoted_value ?? currentLead.quote_amount ?? currentLead.quoted_value;
+    mergedUpdates.quoted_value = updates.quoted_value ?? updates.quote_amount ?? currentLead.quoted_value;
+    mergedUpdates.final_value = updates.final_value ?? currentLead.final_value;
+  }
+
+  const updatedLead: Lead = { ...currentLead, ...mergedUpdates };
 
   if (isFirestoreReady && db) {
     try {
-      const docRef = doc(db, 'leads', leadId);
-      await updateDoc(docRef, sanitizeForFirestore(updates) as any);
+      await db.collection('leads').doc(leadId).set(sanitizeForFirestore(mergedUpdates), { merge: true });
 
       // Status history entry if status changed
       if (updates.status && updates.status !== previousStatus) {
@@ -319,13 +333,15 @@ export async function updateLead(
           previous_status: previousStatus,
           new_status: updates.status,
           changed_by: changedBy,
-          notes: updates.invalid_reason ? `Motivo: ${updates.invalid_reason}` : undefined,
-          timestamp: new Date().toISOString()
+          notes: updates.invalid_reason
+            ? `Motivo: ${updates.invalid_reason}`
+            : (updates.status === 'WON' ? `Presupuesto ganado: ${updatedLead.final_value || 0} € (Ingreso: ${updatedLead.revenue_amount || 0} €)` : undefined),
+          timestamp: now
         };
-        await setDoc(doc(db, 'lead_status_history', historyEntry.history_id), sanitizeForFirestore(historyEntry));
+        await db.collection('lead_status_history').doc(historyEntry.history_id).set(sanitizeForFirestore(historyEntry));
       }
     } catch (err) {
-      console.error('[CuántoVale DB] Error updating lead in Firestore:', err);
+      console.error('[CuántoVale DB] Failed to update lead in Firestore, using memory fallback:', err);
     }
   }
 
@@ -333,16 +349,16 @@ export async function updateLead(
   return updatedLead;
 }
 
-// Route Lead to Max 2 Providers
+// Strict Max 2 Provider Routing Logic
 export async function routeLeadProviders(
   leadId: string,
-  assignedProviderIds: string[],
+  providerIds: string[],
   changedBy: string = 'admin_operator'
 ): Promise<{ success: boolean; error?: string; lead?: Lead }> {
-  if (assignedProviderIds.length > 2) {
+  if (providerIds.length > 2) {
     return {
       success: false,
-      error: 'Regla CuántoVale: Máximo 2 empresas instaladoras por solicitud.'
+      error: 'Infracción de modelo: Un lead solo puede asignarse a un máximo de 2 empresas homologadas.'
     };
   }
 
@@ -351,12 +367,21 @@ export async function routeLeadProviders(
     return { success: false, error: 'Lead no encontrado' };
   }
 
-  const newStatus: LeadStatus = assignedProviderIds.length > 0 ? 'ROUTED' : 'VERIFIED';
+  const currentAssigned = currentLead.assigned_provider_ids || [];
+  const combined = Array.from(new Set([...currentAssigned, ...providerIds]));
+
+  if (combined.length > 2) {
+    return {
+      success: false,
+      error: `Límite alcanzado: Este lead ya tiene ${currentAssigned.length} empresa(s) asignada(s). Máximo total permitido: 2.`
+    };
+  }
+
   const updatedLead = await updateLead(
     leadId,
     {
-      assigned_provider_ids: assignedProviderIds,
-      status: newStatus
+      assigned_provider_ids: combined,
+      status: currentLead.status === 'NEW' ? 'ROUTED' : currentLead.status
     },
     changedBy
   );
@@ -369,8 +394,7 @@ export async function getProviders(filters?: { record_type?: string }): Promise<
   let list: Provider[] = [];
   if (isFirestoreReady && db) {
     try {
-      const provCol = collection(db, 'providers');
-      const snapshot = await getDocs(provCol);
+      const snapshot = await db.collection('providers').get();
       if (!snapshot.empty) {
         list = snapshot.docs.map(d => d.data() as Provider);
       }
@@ -388,7 +412,7 @@ export async function getProviders(filters?: { record_type?: string }): Promise<
   return list;
 }
 
-// Record Provider Outreach / Interview Interaction (Requirement 4, 5, 6)
+// Record Provider Outreach / Interview Interaction
 export async function recordProviderInteraction(
   providerId: string,
   interactionData: Omit<ProviderInteraction, 'interaction_id' | 'recorded_at'>
@@ -407,7 +431,6 @@ export async function recordProviderInteraction(
   const currentInteractions = currentProvider.interactions || [];
   const updatedInteractions = [newInteraction, ...currentInteractions];
 
-  // Derive new status
   let newStatus = currentProvider.status;
   if (interactionData.contact_result === 'pilot_accepted') {
     newStatus = 'PILOT_ACCEPTED';
@@ -438,38 +461,36 @@ export async function recordProviderInteraction(
 
 // Add Provider
 export async function createProvider(providerData: Omit<Provider, 'provider_id' | 'active_leads_count'>): Promise<Provider> {
-  const providerId = `prov-${crypto.randomUUID().slice(0, 8)}`;
   const newProvider: Provider = {
     ...providerData,
-    provider_id: providerId,
+    provider_id: `prov-${crypto.randomUUID()}`,
     active_leads_count: 0
   };
 
   if (isFirestoreReady && db) {
     try {
-      await setDoc(doc(db, 'providers', providerId), sanitizeForFirestore(newProvider));
+      await db.collection('providers').doc(newProvider.provider_id).set(sanitizeForFirestore(newProvider));
     } catch (err) {
-      console.error('[CuántoVale DB] Error creating provider in Firestore:', err);
+      console.error('[CuántoVale DB] Error saving provider to Firestore:', err);
     }
   }
 
-  memoryProviders.set(providerId, newProvider);
+  memoryProviders.set(newProvider.provider_id, newProvider);
   return newProvider;
 }
 
-// Get Provider By ID
+// Get Single Provider
 export async function getProviderById(providerId: string): Promise<Provider | null> {
   if (memoryProviders.has(providerId)) {
     return memoryProviders.get(providerId)!;
   }
   if (isFirestoreReady && db) {
     try {
-      const docRef = doc(db, 'providers', providerId);
-      const snapshot = await getDoc(docRef);
-      if (snapshot.exists()) {
-        const data = snapshot.data() as Provider;
-        memoryProviders.set(providerId, data);
-        return data;
+      const snap = await db.collection('providers').doc(providerId).get();
+      if (snap.exists) {
+        const prov = snap.data() as Provider;
+        memoryProviders.set(providerId, prov);
+        return prov;
       }
     } catch (err) {
       console.error('[CuántoVale DB] Error getting provider by ID from Firestore:', err);
@@ -478,65 +499,48 @@ export async function getProviderById(providerId: string): Promise<Provider | nu
   return null;
 }
 
-// Update Provider (Commercial workflow)
+// Update Provider
 export async function updateProvider(providerId: string, updates: Partial<Provider>): Promise<Provider | null> {
   const currentProvider = await getProviderById(providerId);
   if (!currentProvider) return null;
 
-  const updated: Provider = { ...currentProvider, ...updates };
+  const updatedProvider: Provider = { ...currentProvider, ...updates };
 
   if (isFirestoreReady && db) {
     try {
-      const docRef = doc(db, 'providers', providerId);
-      await updateDoc(docRef, sanitizeForFirestore(updates) as any);
+      await db.collection('providers').doc(providerId).set(sanitizeForFirestore(updates), { merge: true });
     } catch (err) {
       console.error('[CuántoVale DB] Error updating provider in Firestore:', err);
     }
   }
 
-  memoryProviders.set(providerId, updated);
-  return updated;
+  memoryProviders.set(providerId, updatedProvider);
+  return updatedProvider;
 }
 
-// Internal Statistical Index (Requirement 25 & 26: N, Median, P25, P75)
-export async function getInternalPriceIndexStats(filters?: { service?: string; province?: string }) {
-  const allLeads = await getLeads(filters);
-  const quotes = allLeads
-    .map(l => l.final_value || l.quoted_value || (l.provider_feedback?.quoted_amount))
-    .filter((v): v is number => typeof v === 'number' && v > 0)
-    .sort((a, b) => a - b);
-
-  const n = quotes.length;
-  if (n === 0) {
-    return { n: 0, median: 0, p25: 0, p75: 0, min: 0, max: 0, isSampleSufficient: false };
-  }
-
-  const getPercentile = (p: number) => {
-    const index = (p / 100) * (n - 1);
-    const lower = Math.floor(index);
-    const upper = Math.ceil(index);
-    const weight = index - lower;
-    if (upper >= n) return quotes[n - 1];
-    return quotes[lower] * (1 - weight) + quotes[upper] * weight;
-  };
+// Internal Price Index Metrics
+export function getInternalPriceIndexStats(_filters?: { service?: string; province?: string }) {
+  const allLeads = Array.from(memoryLeads.values());
+  const quotesCount = allLeads.filter(l => l.quoted_value && l.quoted_value > 0).length;
+  const wonCount = allLeads.filter(l => l.status === 'WON').length;
+  const totalWonValue = allLeads
+    .filter(l => l.status === 'WON')
+    .reduce((sum, l) => sum + (l.final_value || l.quoted_value || 0), 0);
 
   return {
-    n,
-    min: quotes[0],
-    max: quotes[n - 1],
-    median: Math.round(getPercentile(50)),
-    p25: Math.round(getPercentile(25)),
-    p75: Math.round(getPercentile(75)),
-    isSampleSufficient: n >= 30 // Requirement 25: Minimum 30 real quotes before public publication
+    registeredQuotes: quotesCount,
+    closedWorks: wonCount,
+    totalWonValueEur: totalWonValue,
+    activeIndexVersion: '2026.Q1-BETA'
   };
 }
 
 // Record Analytics Event
 export async function recordAnalyticsEvent(event: AnalyticsEvent): Promise<void> {
+  const eventId = `evt-${crypto.randomUUID()}`;
   if (isFirestoreReady && db) {
     try {
-      const eventId = `evt-${crypto.randomUUID()}`;
-      await setDoc(doc(db, 'analytics_events', eventId), sanitizeForFirestore({
+      await db.collection('analytics_events').doc(eventId).set(sanitizeForFirestore({
         ...event,
         recorded_at: new Date().toISOString()
       }));
@@ -556,7 +560,7 @@ export function getRecentAnalytics(): AnalyticsEvent[] {
 }
 
 // ----------------------------------------------------
-// FIRESTORE PERSISTENT ADMIN SESSIONS (Requirement FASE 3.4)
+// FIRESTORE PERSISTENT ADMIN SESSIONS VIA ADMIN SDK
 // ----------------------------------------------------
 export interface AdminSessionDoc {
   session_id_hash: string;
@@ -591,9 +595,9 @@ export async function createAdminSessionFirestore(rawSessionId: string, adminId 
 
   if (isFirestoreReady && db) {
     try {
-      await setDoc(doc(db, 'admin_sessions', hash), sessionData);
+      await db.collection('admin_sessions').doc(hash).set(sessionData);
     } catch (err) {
-      console.error('[CuántoVale Sessions] Error persisting session to Firestore:', err);
+      console.error('[CuántoVale Sessions] Error persisting session to Firestore via Admin SDK:', err);
     }
   }
 
@@ -609,13 +613,12 @@ export async function isValidAdminSessionFirestore(rawSessionId: string): Promis
 
   if (isFirestoreReady && db) {
     try {
-      const docRef = doc(db, 'admin_sessions', hash);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
+      const snap = await db.collection('admin_sessions').doc(hash).get();
+      if (snap.exists) {
         session = snap.data() as AdminSessionDoc;
       }
     } catch (err) {
-      // Fallback
+      // Fallback to memory
     }
   }
 
@@ -635,7 +638,7 @@ export async function isValidAdminSessionFirestore(rawSessionId: string): Promis
   memorySessions.set(hash, session);
 
   if (isFirestoreReady && db) {
-    updateDoc(doc(db, 'admin_sessions', hash), { last_seen_at: nowIso }).catch(() => {});
+    db.collection('admin_sessions').doc(hash).update({ last_seen_at: nowIso }).catch(() => {});
   }
 
   return true;
@@ -654,12 +657,12 @@ export async function revokeAdminSessionFirestore(rawSessionId: string): Promise
 
   if (isFirestoreReady && db) {
     try {
-      await updateDoc(doc(db, 'admin_sessions', hash), {
+      await db.collection('admin_sessions').doc(hash).update({
         revoked: true,
         revoked_at: nowIso
       });
     } catch (err) {
-      console.error('[CuántoVale Sessions] Error revoking session in Firestore:', err);
+      console.error('[CuántoVale Sessions] Error revoking session in Firestore via Admin SDK:', err);
     }
   }
 }

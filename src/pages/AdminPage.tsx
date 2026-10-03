@@ -3,7 +3,6 @@ import { SEOMetaHead } from '../components/SEOMetaHead';
 import { Lead, LeadStatus, InvalidReason, Provider, ProviderStatus, ProviderInteraction, AnalyticsEvent } from '../types';
 import { INITIAL_LEADS } from '../data/leadsSeed';
 import { INITIAL_PROVIDERS } from '../data/providersSeed';
-import { getLeadsDirectly } from '../firebaseClient';
 import {
   LayoutDashboard,
   Inbox,
@@ -129,7 +128,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
 
     fetch('/api/admin/leads?record_type=ALL', {
       headers,
-      credentials: 'include'
+      credentials: 'include',
+      cache: 'no-store'
     })
       .then(res => {
         if (!res.ok) throw new Error('401 Unauthorized');
@@ -142,13 +142,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           setAuthError('');
         }
       })
-      .catch(() => {
-        // Resilient fallback to direct Firestore if backend proxy fails
-        getLeadsDirectly().then(directLeads => {
-          setLeads(directLeads);
-        }).catch(() => {
-          setLeads(prev => prev.length > 0 ? prev : INITIAL_LEADS);
-        });
+      .catch((err) => {
+        console.error('[Admin] Error loading leads from API:', err);
       });
 
     fetch('/api/admin/providers?record_type=ALL', {
@@ -209,16 +204,6 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
         loadAdminData();
       })
       .catch(() => {
-        // Operator fallback key check
-        if (cleanKey === 'cv-admin-2026-pci' || cleanKey.toLowerCase() === 'admin-pci-2026') {
-          setIsAuthenticated(true);
-          setKeyInput('');
-          setAuthError('');
-          setLeads(INITIAL_LEADS);
-          setProviders(INITIAL_PROVIDERS);
-          loadAdminData();
-          return;
-        }
         setAuthError('Clave de administrador incorrecta (HTTP 401). Verifica los caracteres.');
       });
   };
@@ -264,7 +249,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
   const winRateText = quotesIssued > 0 ? `${((jobsWon / quotesIssued) * 100).toFixed(1)}%` : 'N/A';
 
   const realAdSpend = 0; // Inactivo en pre-launch
-  const realRevenuePaid = scopedLeads.reduce((acc, curr) => acc + (curr.payment_status === 'PAID' ? (curr.lead_price || 0) : 0), 0);
+  const realTotalWorkVolume = scopedLeads
+    .filter(l => l.status === 'WON')
+    .reduce((acc, curr) => acc + (curr.final_value || curr.quoted_value || curr.quote_amount || 0), 0);
+  const realRevenuePaid = scopedLeads
+    .filter(l => l.status === 'WON')
+    .reduce((acc, curr) => acc + (curr.revenue_amount ?? curr.lead_price ?? 50), 0);
 
   // Providers Outreach Pipeline Counts
   const realProvidersContacted = providers.filter(p => p.interactions && p.interactions.length > 0).length;
@@ -356,30 +346,51 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
     return true;
   });
 
-  const handleUpdateStatus = (leadId: string, newStatus: LeadStatus, invalidReason?: InvalidReason) => {
-    setLeads(prev =>
-      prev.map(l => {
-        if (l.lead_id === leadId) {
-          return {
-            ...l,
-            status: newStatus,
-            invalid_reason: invalidReason !== undefined ? invalidReason : l.invalid_reason
-          };
-        }
-        return l;
-      })
-    );
+  const handleUpdateStatus = async (leadId: string, newStatus: LeadStatus, invalidReason?: InvalidReason) => {
+    const previousLead = leads.find(l => l.lead_id === leadId);
+    if (!previousLead) return;
 
+    const statusUpdates: Partial<Lead> = {
+      status: newStatus,
+      invalid_reason: invalidReason !== undefined ? invalidReason : undefined
+    };
+
+    // Optimistic UI update
+    setLeads(prev =>
+      prev.map(l => (l.lead_id === leadId ? { ...l, ...statusUpdates } : l))
+    );
     if (selectedLead && selectedLead.lead_id === leadId) {
-      setSelectedLead(prev => (prev ? { ...prev, status: newStatus, invalid_reason: invalidReason } : null));
+      setSelectedLead(prev => (prev ? { ...prev, ...statusUpdates } : null));
     }
 
-    fetch(`/api/admin/leads/${leadId}`, {
-      method: 'PATCH',
-      headers: getAdminHeaders(),
-      credentials: 'include',
-      body: JSON.stringify({ status: newStatus, invalid_reason: invalidReason })
-    }).catch(() => {});
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { ...getAdminHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(statusUpdates)
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al actualizar estado en el servidor');
+      }
+
+      const resData = await res.json();
+      if (resData.lead) {
+        setLeads(prev => prev.map(l => (l.lead_id === leadId ? resData.lead : l)));
+        if (selectedLead && selectedLead.lead_id === leadId) {
+          setSelectedLead(resData.lead);
+        }
+      }
+    } catch (err: any) {
+      // Revert optimistic update
+      setLeads(prev => prev.map(l => (l.lead_id === leadId ? previousLead : l)));
+      if (selectedLead && selectedLead.lead_id === leadId) {
+        setSelectedLead(previousLead);
+      }
+      setRoutingError(err.message || 'Error al guardar cambio de estado.');
+    }
   };
 
   const handleAssignProvider = (leadId: string, providerId: string) => {
@@ -400,67 +411,106 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
     }
   };
 
-  const updateLeadProviders = (leadId: string, providerIds: string[]) => {
-    setLeads(prev =>
-      prev.map(l => {
-        if (l.lead_id === leadId) {
-          const newStatus: LeadStatus = providerIds.length > 0 ? 'ROUTED' : 'VERIFIED';
-          return {
-            ...l,
-            assigned_provider_ids: providerIds,
-            status: l.status === 'NEW' || l.status === 'VERIFICATION_PENDING' || l.status === 'VERIFIED' ? newStatus : l.status
-          };
-        }
-        return l;
-      })
-    );
+  const updateLeadProviders = async (leadId: string, providerIds: string[]) => {
+    const previousLead = leads.find(l => l.lead_id === leadId);
+    if (!previousLead) return;
 
+    const newStatus: LeadStatus = providerIds.length > 0 ? 'ROUTED' : 'VERIFIED';
+    const computedStatus =
+      previousLead.status === 'NEW' || previousLead.status === 'VERIFICATION_PENDING' || previousLead.status === 'VERIFIED'
+        ? newStatus
+        : previousLead.status;
+
+    // Optimistic UI update
+    setLeads(prev =>
+      prev.map(l =>
+        l.lead_id === leadId
+          ? { ...l, assigned_provider_ids: providerIds, status: computedStatus }
+          : l
+      )
+    );
     if (selectedLead && selectedLead.lead_id === leadId) {
-      setSelectedLead(prev => (prev ? { ...prev, assigned_provider_ids: providerIds } : null));
+      setSelectedLead(prev => (prev ? { ...prev, assigned_provider_ids: providerIds, status: computedStatus } : null));
     }
 
-    fetch(`/api/admin/leads/${leadId}/route`, {
-      method: 'POST',
-      headers: getAdminHeaders(),
-      credentials: 'include',
-      body: JSON.stringify({ assigned_provider_ids: providerIds })
-    }).catch(() => {});
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/route`, {
+        method: 'POST',
+        headers: { ...getAdminHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ assigned_provider_ids: providerIds })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al asignar empresas.');
+      }
+
+      const resData = await res.json();
+      if (resData.lead) {
+        setLeads(prev => prev.map(l => (l.lead_id === leadId ? resData.lead : l)));
+        if (selectedLead && selectedLead.lead_id === leadId) {
+          setSelectedLead(resData.lead);
+        }
+      }
+    } catch (err: any) {
+      // Revert optimistic update
+      setLeads(prev => prev.map(l => (l.lead_id === leadId ? previousLead : l)));
+      if (selectedLead && selectedLead.lead_id === leadId) {
+        setSelectedLead(previousLead);
+      }
+      setRoutingError(err.message || 'Error al persistir asignación.');
+    }
   };
 
-  const handleSaveEconomicData = (leadId: string, quoted: number, won: number) => {
-    setLeads(prev =>
-      prev.map(l => {
-        if (l.lead_id === leadId) {
-          return {
-            ...l,
-            quoted_value: quoted,
-            final_value: won,
-            status: won > 0 ? 'WON' : quoted > 0 ? 'QUOTE_ISSUED' : l.status
-          };
-        }
-        return l;
-      })
-    );
+  const handleSaveEconomicData = async (leadId: string, quoted: number, won: number) => {
+    const previousLead = leads.find(l => l.lead_id === leadId);
+    if (!previousLead) return;
 
+    const newStatus: LeadStatus | undefined = won > 0 ? 'WON' : quoted > 0 ? 'QUOTE_ISSUED' : undefined;
+    const economicUpdates: Partial<Lead> = {
+      quoted_value: quoted,
+      quote_amount: quoted,
+      final_value: won,
+      ...(newStatus ? { status: newStatus } : {})
+    };
+
+    // Optimistic UI update
+    setLeads(prev =>
+      prev.map(l => (l.lead_id === leadId ? { ...l, ...economicUpdates } : l))
+    );
     if (selectedLead && selectedLead.lead_id === leadId) {
-      setSelectedLead(prev =>
-        prev
-          ? {
-              ...prev,
-              quoted_value: quoted,
-              final_value: won,
-              status: won > 0 ? 'WON' : quoted > 0 ? 'QUOTE_ISSUED' : prev.status
-            }
-          : null
-      );
+      setSelectedLead(prev => (prev ? { ...prev, ...economicUpdates } : null));
     }
 
-    fetch(`/api/admin/leads/${leadId}`, {
-      method: 'PATCH',
-      headers: getAdminHeaders(),
-      credentials: 'include',
-      body: JSON.stringify({ quoted_value: quoted, final_value: won })
-    }).catch(() => {});
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { ...getAdminHeaders(), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(economicUpdates)
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al guardar importes económicos.');
+      }
+
+      const resData = await res.json();
+      if (resData.lead) {
+        setLeads(prev => prev.map(l => (l.lead_id === leadId ? resData.lead : l)));
+        if (selectedLead && selectedLead.lead_id === leadId) {
+          setSelectedLead(resData.lead);
+        }
+      }
+    } catch (err: any) {
+      // Revert optimistic update
+      setLeads(prev => prev.map(l => (l.lead_id === leadId ? previousLead : l)));
+      if (selectedLead && selectedLead.lead_id === leadId) {
+        setSelectedLead(previousLead);
+      }
+      setRoutingError(err.message || 'Error al persistir importes.');
+    }
   };
 
   // Pricing Catalog Data (Requirement 27 & 28)
@@ -508,7 +558,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
                 type="password"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                placeholder="cv-admin-..."
+                placeholder="Introduce tu clave de operador..."
                 autoFocus
                 className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white placeholder-slate-600 text-sm font-mono focus:outline-none focus:border-blue-500 transition-colors"
               />
@@ -789,13 +839,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
                 <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Obras Ganadas</span>
                 <span className="text-2xl font-extrabold text-emerald-600 mt-1 block font-mono">{jobsWon}</span>
-                <span className="text-[10px] text-slate-400 mt-1 block">Contratadas</span>
+                <span className="text-[10px] text-slate-400 mt-1 block">{realTotalWorkVolume.toLocaleString('es-ES')} € presupuestado</span>
               </div>
 
               <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Real Revenue</span>
+                <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">Ingresos CuántoVale</span>
                 <span className="text-2xl font-extrabold text-slate-950 mt-1 block font-mono">{realRevenuePaid.toFixed(0)} €</span>
-                <span className="text-[10px] text-slate-400 mt-1 block">Cobrado</span>
+                <span className="text-[10px] text-slate-400 mt-1 block">Tarifas intermediación</span>
               </div>
             </div>
 

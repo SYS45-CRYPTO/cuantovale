@@ -7,7 +7,6 @@ import {
 } from '../types';
 import { SPANISH_PROVINCES_ALPHABETICAL, getProvinceFromPostcode } from '../data/provinces';
 import { trackEvent } from '../utils/analytics';
-import { submitLeadDirectly } from '../firebaseClient';
 import { X, CheckCircle2, AlertCircle, ArrowRight, ArrowLeft, ShieldCheck, Check, Building2, Calculator } from 'lucide-react';
 
 interface LeadModalOrFormProps {
@@ -179,31 +178,24 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
       consent_version: '2026-v1',
       status: 'NEW',
       lead_model: 'SHARED',
-      assigned_provider_ids: []
+      assigned_provider_ids: [],
+      record_type: 'PRODUCTION_REAL'
     };
 
     try {
-      let createdLead: Lead | null = null;
+      const response = await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(leadPayload)
+      });
 
-      try {
-        const response = await fetch('/api/leads', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(leadPayload)
-        });
-
-        if (response.ok) {
-          const resData = await response.json();
-          createdLead = resData.lead;
-        }
-      } catch (networkErr) {
-        console.warn('Network request failed, falling back to direct Firestore:', networkErr);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || 'Error al registrar la solicitud');
       }
 
-      // If backend proxy failed (e.g. Netlify external proxy 404), save directly to Firestore
-      if (!createdLead) {
-        createdLead = await submitLeadDirectly(leadPayload);
-      }
+      const resData = await response.json();
+      const createdLead: Lead = resData.lead;
 
       if (createdLead) {
         setSubmittedLead(createdLead);
@@ -215,7 +207,7 @@ export const LeadModalOrForm: React.FC<LeadModalOrFormProps> = ({
         throw new Error('Error al registrar la solicitud');
       }
     } catch (err: any) {
-      setErrorMsg('No se pudo enviar la solicitud. Por favor inténtalo de nuevo.');
+      setErrorMsg(err.message || 'No se pudo enviar la solicitud. Por favor inténtalo de nuevo.');
     } finally {
       setLoading(false);
     }

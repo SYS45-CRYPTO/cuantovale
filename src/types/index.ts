@@ -147,7 +147,11 @@ export interface Lead {
   paid_by_provider?: boolean;
   lead_model: LeadModel;
   quoted_value?: number;
+  quote_amount?: number;
   final_value?: number;
+  revenue_amount?: number;
+  won_at?: string;
+  updated_at?: string;
   provider_feedback?: {
     was_valid?: boolean;
     was_contacted?: boolean;
